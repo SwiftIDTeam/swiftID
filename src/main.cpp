@@ -3,7 +3,7 @@
 #include <RFID.h>
 
 
-#define GPIO_BUTTON_PIN 000000 //******** REPLACE THIS WITH PIN WE CONNECT BUTTON TO*******
+#define GPIO_BUTTON_PIN 32 //******** REPLACE THIS WITH PIN WE CONNECT BUTTON TO*******
 
 // USING VSPI pins (Could also use HSPI miso= 12, mosi= 13, ss= 15 , sck= 14)
 
