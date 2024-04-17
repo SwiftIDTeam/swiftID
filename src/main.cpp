@@ -1,9 +1,10 @@
 #include <Arduino.h>
 #include <SPI.h>
 #include <RFID.h>
+#include <BluetoothSerial.h>
 
 
-#define GPIO_BUTTON_PIN 32 //******** REPLACE THIS WITH PIN WE CONNECT BUTTON TO*******
+#define GPIO_BUTTON_READ_PIN 32 // Pin connected to button used to trigger scan (initiates software interrupt)
 
 // USING VSPI pins (Could also use HSPI miso= 12, mosi= 13, ss= 15 , sck= 14)
 
@@ -16,18 +17,47 @@
 #define VSPI_MISO 19  // MISO pin for VSPI
 #define VSPI_MOSI 23  // MOSI pin for VSPI
 
+//the size of the array of integers that will contain the serial number form a card
+#define SerNum_Array_Size 5 // ** this can change with different cards **
+
 // Create an instance of the SPI class for VSPI
 SPIClass RFID_SPI(VSPI);
 
 // Create an instance of the RFID class
 RFID rfid(RFID_SS_PIN, RFID_RST_PIN);
 
+//create an instance of the bluetooth class
+BluetoothSerial ESP32_BT;
+
 volatile bool scanRequested = false;
 
-int serNum[5]; // stores scanned RFID
+int serNum[SerNum_Array_Size]; // stores scanned RFID
 
-void IRAM_ATTR buttonISR() { //ISR routine (sets flag)
+unsigned long lastDebounceTime; //stores last time button was pressed
+
+unsigned long debounceDelay = 50; //50 millisecond delay
+
+void IRAM_ATTR read_buttonISR() { //ISR routine (sets flag)
+  if ((millis() - lastDebounceTime) > debounceDelay) { //if there was more than 50 milliseconds between presses its a valid press (avoids mechanical bounce affect)
   scanRequested = true;
+  lastDebounceTime = millis(); //save last time button was pressed
+  }
+}
+
+//function to handle sending RFID via bluetooth
+void Send_RFID_BT(int array[], int length){
+  /*
+  Im not sure what the endianess of our phone is but the esp32 is little endian so it sends data in little endian
+  if we need to change to big endian we can use this for loop
+
+  // Convert array to big-endian byte order
+  for (int i = 0; i < length; i++) {
+    array[i] = htonl(array[i]); // htonl function converts to big-endian
+  }
+  */
+
+  // Send the raw binary data over Bluetooth
+  ESP32_BT.write((uint8_t*)array, length * sizeof(int));
 }
 
 // Function to setup SPI communication
@@ -39,19 +69,11 @@ void Init_SPI() {
   pinMode(RFID_RST_PIN, OUTPUT);
   
   // Attach interrupt to the VSPI interrupt pin (not used in VSPI, but placeholder)
-  attachInterrupt(digitalPinToInterrupt(GPIO_BUTTON_PIN), buttonISR, FALLING);
+  //read interrupt
+  attachInterrupt(digitalPinToInterrupt(GPIO_BUTTON_READ_PIN), read_buttonISR, FALLING);
 
   // Reset the RFID reader
   rfid.reset();
-  //******************* OLD RESET CODE *************
-  /*
-  digitalWrite(RFID_RST_PIN, HIGH);
-  delay(100);
-  digitalWrite(RFID_RST_PIN, LOW);
-  delay(100);
-  digitalWrite(RFID_RST_PIN, HIGH);
-  delay(100);
-  */
 
   // Set SS pin to high (deselect)
   digitalWrite(RFID_SS_PIN, HIGH);
@@ -66,10 +88,13 @@ void setup() {
   // initialize RFID
   rfid.init();
 
+  //initialize Bluetooth
+  ESP32_BT.begin("ESP32_RFID_Module");
+
   // Set LED to output
   pinMode(LED_BUILTIN, OUTPUT);
-  // Set button gpio pin to input ******************************** NEED TO GET BUTTON AND FIGURE OUT WHAT PIN TO CONNECT TO
-  pinMode(GPIO_BUTTON_PIN, INPUT);
+  // Set button gpio pin to input
+  pinMode(GPIO_BUTTON_READ_PIN, INPUT);//read
 
   // Call init_SPI function to initialize SPI communication
   Init_SPI();
@@ -92,13 +117,13 @@ void loop() {
         delay(100); // Adjust delay as needed
 
         // move into our serNum[] variable outside the rfid class so we can do more processing and send via bluetooth
-        for (int i = 0; i < 5; i++) {
+        for (int i = 0; i < SerNum_Array_Size; i++) {
           serNum[i] = rfid.serNum[i];
         }
 
         //print card number
         Serial.print("Detected Card: ");
-        for (int i = 0; i < 5; i++) {
+        for (int i = 0; i < SerNum_Array_Size; i++) {
           Serial.print(serNum[i]);
           Serial.print(" ");
         }
@@ -121,13 +146,15 @@ void loop() {
 
     rfid.halt(); //stop RFID reader
 
-    // From here we can implement some varification or something using the Serial Number 
-    // For instance, if we had access to database we would check that its in the schools database, etc...
+    Send_RFID_BT(serNum, SerNum_Array_Size); //send the scanned serial number to phone via bluetooth
+
+    //*** Implement some error handling ***
 
     // Process RFID data
     // Example:
     // Serial.println(data);
 
   }
+
 }
 
