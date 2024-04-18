@@ -94,7 +94,7 @@ void setup() {
   // Set LED to output
   pinMode(LED_BUILTIN, OUTPUT);
   // Set button gpio pin to input
-  pinMode(GPIO_BUTTON_READ_PIN, INPUT);//read
+  pinMode(GPIO_BUTTON_READ_PIN, INPUT_PULLUP);//read
 
   // Call init_SPI function to initialize SPI communication
   Init_SPI();
