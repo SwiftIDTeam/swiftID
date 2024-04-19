@@ -4,7 +4,7 @@
 #include <BluetoothSerial.h>
 
 
-#define GPIO_BUTTON_READ_PIN 32 // Pin connected to button used to trigger scan (initiates software interrupt)
+#define GPIO_BUTTON_READ_PIN 21 // Pin connected to button used to trigger scan (initiates software interrupt)
 
 // USING VSPI pins (Could also use HSPI miso= 12, mosi= 13, ss= 15 , sck= 14)
 
@@ -20,9 +20,6 @@
 //the size of the array of integers that will contain the serial number form a card
 #define SerNum_Array_Size 5 // ** this can change with different cards **
 
-// Create an instance of the SPI class for VSPI
-SPIClass RFID_SPI(VSPI);
-
 // Create an instance of the RFID class
 RFID rfid(RFID_SS_PIN, RFID_RST_PIN);
 
@@ -35,7 +32,7 @@ int serNum[SerNum_Array_Size]; // stores scanned RFID
 
 unsigned long lastDebounceTime; //stores last time button was pressed
 
-unsigned long debounceDelay = 50; //50 millisecond delay
+unsigned long debounceDelay = 500; //100 millisecond delay
 
 void IRAM_ATTR read_buttonISR() { //ISR routine (sets flag)
   if ((millis() - lastDebounceTime) > debounceDelay) { //if there was more than 50 milliseconds between presses its a valid press (avoids mechanical bounce affect)
@@ -63,14 +60,14 @@ void Send_RFID_BT(int array[], int length){
 // Function to setup SPI communication
 void Init_SPI() {
   // Initialize SPI communication on VSPI
-  RFID_SPI.begin();
+  SPI.begin();
 
   // Configure RFID reset pin
   pinMode(RFID_RST_PIN, OUTPUT);
   
-  // Attach interrupt to the VSPI interrupt pin (not used in VSPI, but placeholder)
+  // Attach interrupt to the interrupt pin
   //read interrupt
-  attachInterrupt(digitalPinToInterrupt(GPIO_BUTTON_READ_PIN), read_buttonISR, FALLING);
+  attachInterrupt(digitalPinToInterrupt(GPIO_BUTTON_READ_PIN), read_buttonISR, FALLING); //initiates when we tansition from high to low
 
   // Reset the RFID reader
   rfid.reset();
@@ -85,6 +82,9 @@ void setup() {
   // Initialize Serial Monitor
   Serial.begin(9600);
 
+  // Call init_SPI function to initialize SPI communication
+  Init_SPI(); //*** must do this before initializing rfid module ***
+
   // initialize RFID
   rfid.init();
 
@@ -96,33 +96,30 @@ void setup() {
   // Set button gpio pin to input
   pinMode(GPIO_BUTTON_READ_PIN, INPUT_PULLUP);//read
 
-  // Call init_SPI function to initialize SPI communication
-  Init_SPI();
-
+  digitalWrite(LED_BUILTIN, LOW);
 }
 
 void loop() {
   if (scanRequested) {
-    scanRequested = false;
     //turn on LED
     digitalWrite(LED_BUILTIN, HIGH);
     // Select RFID reader
     digitalWrite(RFID_SS_PIN, LOW);
-    
+
     if(rfid.isCard()){ // Checks if a card is near the scanner
+      //Serial.println("Step 1");
 
       if(rfid.readCardSerial()){ //reads the number from the card
-
-        // Wait for scan to complete (we can probably set some interrupt for this but if not a delay() function will work)
-        delay(100); // Adjust delay as needed
+        //Serial.println("Step 2");
 
         // move into our serNum[] variable outside the rfid class so we can do more processing and send via bluetooth
         for (int i = 0; i < SerNum_Array_Size; i++) {
+          //Serial.println(i);
           serNum[i] = rfid.serNum[i];
         }
 
         //print card number
-        Serial.print("Detected Card: ");
+        Serial.println("Detected Card: ");
         for (int i = 0; i < SerNum_Array_Size; i++) {
           Serial.print(serNum[i]);
           Serial.print(" ");
@@ -130,12 +127,12 @@ void loop() {
         Serial.println("");
       }
       else{
-        Serial.print("Error: Unable To Read Card Serial Number");
+        Serial.println(" Error: Unable To Read Card Serial Number");
       }
 
     }
     else{
-      Serial.print("Error: No Card Detected");
+      Serial.println("Error: No Card Detected");
     }
 
     // Deselect RFID reader
@@ -144,8 +141,6 @@ void loop() {
     //turn off LED
     digitalWrite(LED_BUILTIN, LOW);
 
-    rfid.halt(); //stop RFID reader
-
     Send_RFID_BT(serNum, SerNum_Array_Size); //send the scanned serial number to phone via bluetooth
 
     //*** Implement some error handling ***
@@ -153,8 +148,10 @@ void loop() {
     // Process RFID data
     // Example:
     // Serial.println(data);
+    scanRequested = false;
 
   }
+  rfid.halt(); //stop RFID reader
 
 }
 
