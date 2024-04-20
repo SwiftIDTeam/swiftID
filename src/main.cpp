@@ -33,7 +33,7 @@ int serNum[SerNum_Array_Size]; // stores scanned RFID
 
 unsigned long lastDebounceTime; //stores last time button was pressed
 
-unsigned long debounceDelay = 500; //500 millisecond delay
+unsigned long debounceDelay = 200; //500 millisecond delay
 
 void IRAM_ATTR read_buttonISR() { //ISR routine (sets flag)
   if ((millis() - lastDebounceTime) > debounceDelay) { //if there was more than 500 milliseconds between presses its a valid press (avoids mechanical bounce affect)
@@ -45,12 +45,10 @@ void IRAM_ATTR read_buttonISR() { //ISR routine (sets flag)
 //setting up BLE params
 BLEServer* pServer = NULL;
 BLECharacteristic* pCharacteristic = NULL;
-BLEDescriptor *pDescr;
 BLE2902 *pBLE2902;
 
 bool deviceConnected = false;
 bool oldDeviceConnected = false;
-String value = "";
 
 #define SERVICE_UUID        "4fafc201-1fb5-459e-8fcc-c5c9c331914b"
 #define CHARACTERISTIC_UUID "beb5483e-36e1-4688-b7f5-ea07361b26a8"
@@ -100,15 +98,6 @@ void Init_BLE(){
   // Create a BLE Characteristic
   pCharacteristic = pService->createCharacteristic(CHARACTERISTIC_UUID, BLECharacteristic::PROPERTY_NOTIFY);
 
-  // Create a BLE Descriptor
-  pDescr = new BLEDescriptor((uint16_t)0x2901);
-  pDescr->setValue("A very interesting variable");
-  pCharacteristic->addDescriptor(pDescr);
-  
-  pBLE2902 = new BLE2902();
-  pBLE2902->setNotifications(true);
-  pCharacteristic->addDescriptor(pBLE2902);
-
   // Start the service
   pService->start();
 
@@ -118,7 +107,7 @@ void Init_BLE(){
   pAdvertising->setScanResponse(false);
   pAdvertising->setMinPreferred(0x0);  // set value to 0x00 to not advertise this parameter
   BLEDevice::startAdvertising();
-  Serial.println("Waiting a client connection to notify...");
+  Serial.println("BLE setup complete");
 }
 
 void setup() {
@@ -136,6 +125,7 @@ void setup() {
   // Set button gpio pin to input
   pinMode(GPIO_BUTTON_READ_PIN, INPUT_PULLUP);//read
 
+  //turn off LED
   digitalWrite(LED_PIN, LOW);
 
   //BLE initialization
@@ -185,8 +175,6 @@ void loop() {
     //turn off LED
     digitalWrite(LED_PIN, LOW);
 
-    //Send_RFID_BT(serNum, SerNum_Array_Size); //send the scanned serial number to phone via bluetooth
-
     if (deviceConnected) {
       for (int i = 0; i < SerNum_Array_Size; i++) {
         pCharacteristic->setValue(serNum[i]);
@@ -194,11 +182,22 @@ void loop() {
         delay(1000);
         }
     }
-
+    //reset flag
     scanRequested = false;
 
     rfid.halt(); //stop RFID reader
 
   }
+  // when a device disconnects we advertise so someone else can connect
+  if (!deviceConnected && oldDeviceConnected) {
+        delay(500); // give the bluetooth stack time
+        pServer->startAdvertising(); // restart advertising
+        Serial.println("restarted advertising");
+        oldDeviceConnected = deviceConnected;
+    }
+  // when device connects we set flags to indicate so
+  if (deviceConnected && !oldDeviceConnected) {
+        oldDeviceConnected = deviceConnected;
+    }
 
 }
