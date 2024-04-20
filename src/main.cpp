@@ -1,10 +1,14 @@
 #include <Arduino.h>
 #include <SPI.h>
 #include <RFID.h>
-#include <BluetoothSerial.h>
+#include <BLEDevice.h>
+#include <BLEServer.h>
+#include <BLEUtils.h>
+#include <BLE2902.h>
 
 
 #define GPIO_BUTTON_READ_PIN 21 // Pin connected to button used to trigger scan (initiates software interrupt)
+#define LED_PIN 2 //built in blue LED
 
 // USING VSPI pins (Could also use HSPI miso= 12, mosi= 13, ss= 15 , sck= 14)
 
@@ -23,39 +27,43 @@
 // Create an instance of the RFID class
 RFID rfid(RFID_SS_PIN, RFID_RST_PIN);
 
-//create an instance of the bluetooth class
-BluetoothSerial ESP32_BT;
-
 volatile bool scanRequested = false;
 
 int serNum[SerNum_Array_Size]; // stores scanned RFID
 
 unsigned long lastDebounceTime; //stores last time button was pressed
 
-unsigned long debounceDelay = 500; //100 millisecond delay
+unsigned long debounceDelay = 500; //500 millisecond delay
 
 void IRAM_ATTR read_buttonISR() { //ISR routine (sets flag)
-  if ((millis() - lastDebounceTime) > debounceDelay) { //if there was more than 50 milliseconds between presses its a valid press (avoids mechanical bounce affect)
+  if ((millis() - lastDebounceTime) > debounceDelay) { //if there was more than 500 milliseconds between presses its a valid press (avoids mechanical bounce affect)
   scanRequested = true;
   lastDebounceTime = millis(); //save last time button was pressed
   }
 }
 
-//function to handle sending RFID via bluetooth
-void Send_RFID_BT(int array[], int length){
-  /*
-  Im not sure what the endianess of our phone is but the esp32 is little endian so it sends data in little endian
-  if we need to change to big endian we can use this for loop
+//setting up BLE params
+BLEServer* pServer = NULL;
+BLECharacteristic* pCharacteristic = NULL;
+BLEDescriptor *pDescr;
+BLE2902 *pBLE2902;
 
-  // Convert array to big-endian byte order
-  for (int i = 0; i < length; i++) {
-    array[i] = htonl(array[i]); // htonl function converts to big-endian
-  }
-  */
+bool deviceConnected = false;
+bool oldDeviceConnected = false;
+String value = "";
 
-  // Send the raw binary data over Bluetooth
-  ESP32_BT.write((uint8_t*)array, length * sizeof(int));
-}
+#define SERVICE_UUID        "4fafc201-1fb5-459e-8fcc-c5c9c331914b"
+#define CHARACTERISTIC_UUID "beb5483e-36e1-4688-b7f5-ea07361b26a8"
+
+class MyServerCallbacks: public BLEServerCallbacks { //callback to change flag when device connects
+    void onConnect(BLEServer* pServer) {
+      deviceConnected = true;
+    };
+
+    void onDisconnect(BLEServer* pServer) { //callback to change flag when device disconnects
+      deviceConnected = false;
+    }
+};
 
 // Function to setup SPI communication
 void Init_SPI() {
@@ -78,6 +86,41 @@ void Init_SPI() {
   // Configure RFID reader settings here
 }
 
+void Init_BLE(){
+   // Create the BLE Device
+  BLEDevice::init("ESP32_RFID");
+
+  // Create the BLE Server
+  pServer = BLEDevice::createServer();
+  pServer->setCallbacks(new MyServerCallbacks());
+
+  // Create the BLE Service
+  BLEService *pService = pServer->createService(SERVICE_UUID);
+
+  // Create a BLE Characteristic
+  pCharacteristic = pService->createCharacteristic(CHARACTERISTIC_UUID, BLECharacteristic::PROPERTY_NOTIFY);
+
+  // Create a BLE Descriptor
+  pDescr = new BLEDescriptor((uint16_t)0x2901);
+  pDescr->setValue("A very interesting variable");
+  pCharacteristic->addDescriptor(pDescr);
+  
+  pBLE2902 = new BLE2902();
+  pBLE2902->setNotifications(true);
+  pCharacteristic->addDescriptor(pBLE2902);
+
+  // Start the service
+  pService->start();
+
+  // Start advertising
+  BLEAdvertising *pAdvertising = BLEDevice::getAdvertising();
+  pAdvertising->addServiceUUID(SERVICE_UUID);
+  pAdvertising->setScanResponse(false);
+  pAdvertising->setMinPreferred(0x0);  // set value to 0x00 to not advertise this parameter
+  BLEDevice::startAdvertising();
+  Serial.println("Waiting a client connection to notify...");
+}
+
 void setup() {
   // Initialize Serial Monitor
   Serial.begin(9600);
@@ -86,23 +129,24 @@ void setup() {
   Init_SPI(); //*** must do this before initializing rfid module ***
 
   // initialize RFID
-  rfid.init();
-
-  //initialize Bluetooth
-  ESP32_BT.begin("ESP32_RFID_Module");
+  rfid.init();;
 
   // Set LED to output
-  pinMode(LED_BUILTIN, OUTPUT);
+  pinMode(LED_PIN, OUTPUT);
   // Set button gpio pin to input
   pinMode(GPIO_BUTTON_READ_PIN, INPUT_PULLUP);//read
 
-  digitalWrite(LED_BUILTIN, LOW);
+  digitalWrite(LED_PIN, LOW);
+
+  //BLE initialization
+  Init_BLE();
+
 }
 
 void loop() {
   if (scanRequested) {
     //turn on LED
-    digitalWrite(LED_BUILTIN, HIGH);
+    digitalWrite(LED_PIN, HIGH);
     // Select RFID reader
     digitalWrite(RFID_SS_PIN, LOW);
 
@@ -139,19 +183,22 @@ void loop() {
     digitalWrite(RFID_SS_PIN, HIGH);
 
     //turn off LED
-    digitalWrite(LED_BUILTIN, LOW);
+    digitalWrite(LED_PIN, LOW);
 
-    Send_RFID_BT(serNum, SerNum_Array_Size); //send the scanned serial number to phone via bluetooth
+    //Send_RFID_BT(serNum, SerNum_Array_Size); //send the scanned serial number to phone via bluetooth
 
-    //*** Implement some error handling ***
+    if (deviceConnected) {
+      for (int i = 0; i < SerNum_Array_Size; i++) {
+        pCharacteristic->setValue(serNum[i]);
+        pCharacteristic->notify();
+        delay(1000);
+        }
+    }
 
-    // Process RFID data
-    // Example:
-    // Serial.println(data);
     scanRequested = false;
 
+    rfid.halt(); //stop RFID reader
+
   }
-  rfid.halt(); //stop RFID reader
 
 }
-
